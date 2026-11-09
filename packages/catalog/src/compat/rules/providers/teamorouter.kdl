@@ -1,0 +1,18 @@
+// TeamoRouter: a pay-as-you-go gateway that serves first-party model ids
+// (Claude, GPT, Gemini, DeepSeek, GLM, Kimi, Qwen, ...) behind one key. Claude
+// ids are served on an Anthropic Messages endpoint at the API root
+// (`https://api.teamorouter.com/v1/messages`); every other id is served on
+// OpenAI chat completions at `https://api.teamorouter.com/v1`. The split lives
+// in runtime/behavior.kdl (`api-routes provider="teamorouter"`).
+
+provider "teamorouter" {
+	default-model "claude-sonnet-5-5"
+	env "TEAMOROUTER_API_KEY"
+	dynamic-models-authoritative #true
+	// The public price list is the deployment truth for prices and context;
+	// other hosts' rows for the same ids carry their own prices, so the
+	// generator must not backfill from them. Runtime discovery takes only
+	// reasoning and input modalities from the first-party vendor's bundled row.
+	skip-cross-provider-reference-fills #true
+	discovery label="TeamoRouter" allow-unauthenticated=#true
+}

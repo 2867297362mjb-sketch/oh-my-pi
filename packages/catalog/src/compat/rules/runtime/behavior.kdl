@@ -280,6 +280,11 @@ behavior {
 	api-routes provider="zenmux" default="openai-completions" {
 		route "anthropic-messages" prefix="anthropic/"
 	}
+	// TeamoRouter serves Claude ids on its Anthropic Messages endpoint; every
+	// other id stays on chat completions.
+	api-routes provider="teamorouter" default="openai-completions" {
+		route "anthropic-messages" prefix="claude-"
+	}
 	// GLM-5.3-Flash is available on Z.AI's native chat-completions API but
 	// not its Anthropic-compatible coding endpoint (#10539).
 	api-routes provider="zai" default="anthropic-messages" {

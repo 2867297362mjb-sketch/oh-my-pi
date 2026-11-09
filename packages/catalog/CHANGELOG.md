@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added TeamoRouter gateway provider: `/login teamorouter` with `TEAMOROUTER_API_KEY`. Models are discovered live from its public price list; Claude routes to its Anthropic Messages endpoint and other models to chat completions
+
 ## [18.18.5] - 2026-11-09
 
 ### Added

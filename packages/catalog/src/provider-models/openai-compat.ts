@@ -8368,3 +8368,171 @@ export function otariModelManagerOptions(config?: OtariModelManagerConfig): Mode
 		}),
 	};
 }
+
+// ---------------------------------------------------------------------------
+// TeamoRouter
+// ---------------------------------------------------------------------------
+
+/**
+ * TeamoRouter discovery configuration: the API key plus optional base-URL and
+ * fetch overrides. Consumed by {@link teamorouterModelManagerOptions}.
+ */
+export interface TeamoRouterModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+const TEAMOROUTER_OPENAI_BASE_URL = "https://api.teamorouter.com/v1";
+
+/** Sent with discovery and every model request so TeamoRouter can attribute omp traffic. */
+const TEAMOROUTER_CLIENT_HEADERS: Readonly<Record<string, string>> = { "X-Client-Source": "omp-teamorouter" };
+
+/**
+ * First-party vendors whose ids TeamoRouter serves under the same names. Their
+ * bundled rows supply only what the price list does not carry: reasoning and
+ * input modalities (and an output cap when the price list has none).
+ */
+const TEAMOROUTER_VENDORS = [
+	"anthropic",
+	"openai",
+	"google",
+	"deepseek",
+	"zai",
+	"moonshot",
+	"xai",
+	"minimax",
+] as const satisfies readonly GeneratedProvider[];
+
+function createTeamoRouterVendorReferenceMap(): Map<string, ModelSpec<Api>> {
+	const references = new Map<string, ModelSpec<Api>>();
+	for (const vendor of TEAMOROUTER_VENDORS) {
+		for (const [id, reference] of createBundledReferenceMap<Api>(vendor)) {
+			if (!references.has(id)) references.set(id, reference);
+		}
+	}
+	return references;
+}
+
+function normalizeTeamoRouterBaseUrl(baseUrl: string | undefined): string {
+	const normalized = (baseUrl ?? TEAMOROUTER_OPENAI_BASE_URL).trim().replace(/\/+$/, "");
+	return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
+}
+
+/**
+ * Whether a price-list row is a chat model omp can call: token-billed, already
+ * launched, and not an image generator or a promotional `-free` lane. Ids with
+ * whitespace (`gpt-6-astra (fast)`) are display variants, not wire ids.
+ */
+function isTeamoRouterChatRow(
+	entry: Record<string, unknown>,
+	now: number,
+): entry is Record<string, unknown> & {
+	id: string;
+} {
+	const id = entry.id;
+	if (typeof id !== "string" || id.length === 0 || /\s/.test(id)) return false;
+	if (entry.billing_mode !== "token") return false;
+	if (/(^|-)image(-|$)|nano-banana/i.test(id) || id.endsWith("-free")) return false;
+	if (typeof entry.launch_at === "string") {
+		const launchAt = Date.parse(entry.launch_at);
+		if (Number.isFinite(launchAt) && launchAt > now) return false;
+	}
+	return true;
+}
+
+function mapTeamoRouterRow(
+	entry: Record<string, unknown> & { id: string },
+	baseUrls: { openAi: string; anthropic: string },
+	vendor: ModelSpec<Api> | undefined,
+): ModelSpec<Api> {
+	const api: Api =
+		apiRouteFor("teamorouter", entry.id)?.api === "anthropic-messages" ? "anthropic-messages" : "openai-completions";
+	const cost = isRecord(entry.cost) ? entry.cost : {};
+	const listedContext = toPositiveNumber(entry.context_window, null);
+	const vendorContext = vendor?.contextWindow ?? null;
+	return {
+		id: entry.id,
+		name: vendor?.name ?? toModelName(entry.display_name, entry.id),
+		api,
+		provider: "teamorouter",
+		baseUrl: api === "anthropic-messages" ? baseUrls.anthropic : baseUrls.openAi,
+		headers: { ...TEAMOROUTER_CLIENT_HEADERS },
+		reasoning: vendor?.reasoning ?? false,
+		input: vendor?.input ?? ["text"],
+		// The price list quotes USD per million tokens at TeamoRouter's own rates.
+		cost: {
+			input: toNumber(cost.input) ?? 0,
+			output: toNumber(cost.output) ?? 0,
+			cacheRead: toNumber(cost.cache_read) ?? toNumber(cost.cached_input) ?? 0,
+			cacheWrite: toNumber(cost.cache_creation) ?? 0,
+		},
+		// The price list reports one window per id; when the first-party row is
+		// smaller, keep the smaller one so compaction runs before the upstream
+		// rejects an oversized request.
+		contextWindow:
+			listedContext !== null && vendorContext !== null
+				? Math.min(listedContext, vendorContext)
+				: (listedContext ?? vendorContext),
+		maxTokens: toPositiveNumber(entry.max_output_tokens, vendor?.maxTokens ?? null),
+	};
+}
+
+async function fetchTeamoRouterModels(options: {
+	openAiBaseUrl: string;
+	anthropicBaseUrl: string;
+	fetch?: FetchImpl;
+	resolveVendor: (id: string) => ModelSpec<Api> | undefined;
+}): Promise<ModelSpec<Api>[] | null> {
+	const fetchImpl = discoveryFetch(options.fetch);
+	let payload: unknown;
+	try {
+		// The price list is public, so discovery never sends the API key.
+		const response = await withOpenAICompatibleDiscoveryTimeout(
+			DEFAULT_OPENAI_COMPATIBLE_DISCOVERY_TIMEOUT_MS,
+			signal =>
+				fetchImpl(`${options.openAiBaseUrl}/models/pricing`, {
+					method: "GET",
+					headers: { Accept: "application/json", ...TEAMOROUTER_CLIENT_HEADERS },
+					signal,
+				}),
+		);
+		if (!response.ok) return null;
+		payload = await response.json();
+	} catch {
+		return null;
+	}
+	if (!isRecord(payload) || !Array.isArray(payload.models)) return null;
+	const now = Date.now();
+	const baseUrls = { openAi: options.openAiBaseUrl, anthropic: options.anthropicBaseUrl };
+	const models = new Map<string, ModelSpec<Api>>();
+	for (const entry of payload.models) {
+		if (!isRecord(entry) || !isTeamoRouterChatRow(entry, now) || models.has(entry.id)) continue;
+		models.set(entry.id, mapTeamoRouterRow(entry, baseUrls, options.resolveVendor(entry.id)));
+	}
+	return [...models.values()];
+}
+
+/**
+ * TeamoRouter model manager. The roster comes from the public price list at
+ * `/v1/models/pricing` (token-billed chat rows with USD-per-million prices and
+ * context windows); `/v1/models` is key-protected and carries ids only. Claude
+ * ids ride `anthropic-messages` at the API root (`api-routes
+ * provider="teamorouter"`), everything else `openai-completions` at `/v1`.
+ * Capability facts the price list lacks come from the first-party vendor's
+ * bundled row for the same id; ids with no vendor row stay text-only and
+ * non-reasoning.
+ */
+export function teamorouterModelManagerOptions(config?: TeamoRouterModelManagerConfig): ModelManagerOptions<Api> {
+	const openAiBaseUrl = normalizeTeamoRouterBaseUrl(config?.baseUrl);
+	const anthropicBaseUrl = openAiBaseUrl.slice(0, -"/v1".length);
+	let vendorReferences: Map<string, ModelSpec<Api>> | undefined;
+	const resolveVendor = (id: string) => (vendorReferences ??= createTeamoRouterVendorReferenceMap()).get(id);
+	return {
+		providerId: "teamorouter",
+		dynamicModelsAuthoritative: true,
+		dynamicCostAuthoritative: true,
+		fetchDynamicModels: () =>
+			fetchTeamoRouterModels({ openAiBaseUrl, anthropicBaseUrl, fetch: config?.fetch, resolveVendor }),
+	};
+}

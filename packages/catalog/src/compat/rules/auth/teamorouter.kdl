@@ -1,0 +1,11 @@
+auth "teamorouter" {
+	name "TeamoRouter"
+	login "api-key" {
+		auth-url "https://teamorouter.com/dashboard"
+		instructions "Create or copy an API key from the TeamoRouter dashboard"
+		prompt "Paste your TeamoRouter API key" placeholder="sk-..."
+		// `/v1/models` answers 401 without a key and with a bad one (verified
+		// 2026-11-10), so the probe validates the key and bills nothing.
+		validate "models-endpoint" label="TeamoRouter" url="https://api.teamorouter.com/v1/models"
+	}
+}

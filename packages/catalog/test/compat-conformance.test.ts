@@ -35,6 +35,10 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// (otariModelManagerOptions discovers it live per key), so no rows are
 	// frozen into the bundled catalog.
 	"otari",
+	// TeamoRouter's roster is its public price list, discovered live by
+	// teamorouterModelManagerOptions; the bundled catalog gains the rows at the
+	// next regeneration.
+	"teamorouter",
 	// Clef judges are a `bundle="always"` KDL seed that
 	// cloudflareWorkersAiModelManagerOptions serves at runtime; the bundled
 	// catalog gains the rows at the next regeneration.

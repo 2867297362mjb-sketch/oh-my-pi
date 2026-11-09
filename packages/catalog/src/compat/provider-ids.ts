@@ -76,6 +76,7 @@ export type KnownProvider =
 	| "snowflake"
 	| "stepfun"
 	| "synthetic"
+	| "teamorouter"
 	| "together"
 	| "typesafe"
 	| "umans"

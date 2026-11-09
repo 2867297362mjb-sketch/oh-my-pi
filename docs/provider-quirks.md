@@ -1850,6 +1850,22 @@ Otari is an AI gateway and control plane that routes requests to upstream model 
 - Self-hosted deployments set `OTARI_BASE_URL` to the deployment's API root (`https://host.example.com/api/v1`). It redirects `/login otari` validation (`base-url-env`), discovery, and requests, so a self-hosted key is never sent to the hosted gateway. A `models.yml` provider `baseUrl` override also redirects discovery and requests, but login validation only reads `OTARI_BASE_URL`.
 - **Cache scope**: the model cache namespace hashes the API key and base URL (`resolveModelCacheProviderId`, `otari` is in `CREDENTIAL_SCOPED_MODEL_CACHE_PROVIDERS`), so a second workspace or deployment never reads another's cached roster.
 
+## TeamoRouter (`teamorouter`)
+
+TeamoRouter is a pay-as-you-go gateway that serves first-party model ids (Claude, GPT, Gemini, DeepSeek, GLM, Kimi, Qwen, and others) behind one API key. Claude ids are served on an Anthropic Messages endpoint at `https://api.teamorouter.com` (`/v1/messages`); every other id is served on OpenAI Chat Completions at `https://api.teamorouter.com/v1`.
+
+### Special casings
+
+- **Mixed transport**: `api-routes provider="teamorouter"` in `packages/catalog/src/compat/rules/runtime/behavior.kdl` sends `claude-` ids to `anthropic-messages`; everything else stays on `openai-completions`. `teamorouterModelManagerOptions` (`packages/catalog/src/provider-models/openai-compat.ts`) sets each row's base URL to match.
+- **Roster from the price list**: discovery reads the public `GET /v1/models/pricing`, which carries USD-per-million prices (input, output, cache read, cache write) and context windows. `/v1/models` is key-protected and lists ids only, so it is used only to validate the key. Discovery never sends the key.
+- **Capabilities**: the price list carries no reasoning or modality flags. Ids that match a first-party vendor's bundled row (Anthropic, OpenAI, Google, DeepSeek, Z.AI, Moonshot, xAI, MiniMax) take reasoning, input modalities, and the output cap from it. When the vendor's context window is smaller than the price list's, the smaller one is kept. Other ids stay text-only and non-reasoning.
+- **Filtered rows**: per-image rows, image-generation ids, `-free` promotional lanes, display variants whose id contains whitespace, and rows whose `launch_at` is in the future are dropped.
+- **Attribution header**: discovery and every model request send `X-Client-Source: omp-teamorouter` through `model.headers`.
+
+### Auth & usage
+
+- Login kind `api-key` is declared in `packages/catalog/src/compat/rules/auth/teamorouter.kdl`. Environment key: `TEAMOROUTER_API_KEY`. Validation uses `models-endpoint` against `https://api.teamorouter.com/v1/models`, which answers 401 without a valid key, so validation bills nothing.
+
 ## Qwen Portal (`qwen-portal`)
 
 Qwen Portal provides access to Qwen hosted models via an OpenAI-compatible endpoint at `https://portal.qwen.ai/v1`. It uses the OpenAI Chat Completions transport for model execution and tool calling.
